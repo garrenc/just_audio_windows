@@ -514,10 +514,23 @@ public:
 
     auto now = std::chrono::system_clock::now();
 
+    // Try to get the buffering progress or use 1 if an error occurs
+    double bufferingProgress;
+    try
+    {
+      bufferingProgress = session.BufferingProgress();
+    }
+    catch (...)
+    {
+      // If an error occurs, log it and use 1 as the buffering progress
+      std::cerr << "[just_audio_windows]: Broadcast playback evcent error: Error accessing BufferingProgress. Using default value of 1." << std::endl;
+      bufferingProgress = 1;
+    }
+
     eventData[flutter::EncodableValue("processingState")] = flutter::EncodableValue(processingState(session.PlaybackState()));
     eventData[flutter::EncodableValue("updatePosition")] = flutter::EncodableValue(TO_MICROSECONDS(session.Position())); //int
     eventData[flutter::EncodableValue("updateTime")] = flutter::EncodableValue(TO_MILLISECONDS(now.time_since_epoch())); //int
-    eventData[flutter::EncodableValue("bufferedPosition")] = flutter::EncodableValue((int64_t)(duration * session.BufferingProgress())); //int
+    eventData[flutter::EncodableValue("bufferedPosition")] = flutter::EncodableValue((int64_t)(duration * bufferingProgress)); //int
     eventData[flutter::EncodableValue("duration")] = flutter::EncodableValue(duration); //int
 
     if (mediaPlaybackList.Items().Size() > 0) {
