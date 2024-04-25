@@ -16,6 +16,12 @@
 #include <winrt/Windows.Media.Core.h>
 #include <winrt/Windows.Media.Playback.h>
 #include <winrt/Windows.System.h>
+#include <winrt/Windows.Media.Devices.h>
+#include <winrt/Windows.Devices.Enumeration.h>
+#include <ppltasks.h>   
+#include <string>
+
+
 
 #define TO_MILLISECONDS(timespan) timespan.count() / 10000
 #define TO_MICROSECONDS(timespan) TO_MILLISECONDS(timespan) * 1000
@@ -23,8 +29,11 @@
 using flutter::EncodableMap;
 using flutter::EncodableValue;
 
+using namespace winrt::Windows::Devices::Enumeration;
 using namespace winrt::Windows::Foundation;
 using namespace winrt::Windows::Media;
+using namespace concurrency;
+
 
 using winrt::Windows::Media::Core::MediaSource;
 
@@ -77,13 +86,13 @@ auto TO_WIDESTRING = [](std::string string) -> std::wstring {
 };
 
 
-class JustAudioEventSink {
+class AudioEventSink {
 public:
   // Prevent copying.
-  JustAudioEventSink(JustAudioEventSink const&) = delete;
-  JustAudioEventSink& operator=(JustAudioEventSink const&) = delete;
+  AudioEventSink(AudioEventSink const&) = delete;
+  AudioEventSink& operator=(AudioEventSink const&) = delete;
 
-  JustAudioEventSink::JustAudioEventSink(flutter::BinaryMessenger* messenger, const std::string& id) {
+ AudioEventSink(flutter::BinaryMessenger* messenger, const std::string& id) {
     auto event_channel =
       std::make_unique<flutter::EventChannel<flutter::EncodableValue>>(messenger, id, &flutter::StandardMethodCodec::GetInstance());
 
@@ -117,307 +126,374 @@ private:
 
 class AudioPlayer {
 private:
-  /* data */
+    /* data */
 public:
-  std::string id;
-  Playback::MediaPlayer mediaPlayer{};
-  Playback::MediaPlaybackList mediaPlaybackList{};
+    std::string id;
+    Playback::MediaPlayer mediaPlayer{};
+    Playback::MediaPlaybackList mediaPlaybackList{};
 
-  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> player_channel_;
-  std::unique_ptr<JustAudioEventSink> event_sink_ = nullptr;
-  std::unique_ptr<JustAudioEventSink> data_sink_ = nullptr;
+    std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> player_channel_;
+    std::unique_ptr<AudioEventSink> event_sink_ = nullptr;
+    std::unique_ptr<AudioEventSink> data_sink_ = nullptr;
 
-  AudioPlayer::AudioPlayer(std::string idx, flutter::BinaryMessenger* messenger) {
-    id = idx;
+    AudioPlayer(std::string idx, flutter::BinaryMessenger* messenger) {
+        id = idx;
 
-    // Set up channels
-    player_channel_ =
-      std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
-        messenger, "com.ryanheise.just_audio.methods." + idx,
-        &flutter::StandardMethodCodec::GetInstance()
-        );
+        // Set up channels
+        player_channel_ =
+            std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+                messenger, "com.ryanheise.just_audio.methods." + idx,
+                &flutter::StandardMethodCodec::GetInstance()
+            );
 
-    player_channel_->SetMethodCallHandler(
-      [player = this](const auto& call, auto result) {
-      player->HandleMethodCall(call, std::move(result));
-    });
+        player_channel_->SetMethodCallHandler(
+            [player = this](const auto& call, auto result) {
+                player->HandleMethodCall(call, std::move(result));
+            });
 
-    event_sink_ = std::make_unique<JustAudioEventSink>(messenger, "com.ryanheise.just_audio.events." + idx);
-    data_sink_ = std::make_unique<JustAudioEventSink>(messenger, "com.ryanheise.just_audio.data." + idx);
+        event_sink_ = std::make_unique<AudioEventSink>(messenger, "com.ryanheise.just_audio.events." + idx);
+        data_sink_ = std::make_unique<AudioEventSink>(messenger, "com.ryanheise.just_audio.data." + idx);
 
-    /// Set up event callbacks
-    // Playback event
-    mediaPlayer.PlaybackSession().PlaybackStateChanged([=](auto, const auto& args) -> void {
-      broadcastState();
-    });
+        /// Set up event callbacks
+        // Playback event
+        mediaPlayer.PlaybackSession().PlaybackStateChanged([=](auto, const auto& args) -> void {
+            broadcastState();
+            });
 
-    // Player error event
-    mediaPlayer.MediaFailed([=](auto, const Playback::MediaPlayerFailedEventArgs& args) -> void {
-      std::string errorMessage = winrt::to_string(args.ErrorMessage());
+        // Player error event
+        mediaPlayer.MediaFailed([=](auto, const Playback::MediaPlayerFailedEventArgs& args) -> void {
+            std::string errorMessage = winrt::to_string(args.ErrorMessage());
 
-      std::cerr << "[just_audio_windows] Media error: " << errorMessage << std::endl;
+            std::cerr << "[just_audio_windows] Media error: " << errorMessage << std::endl;
 
-      auto code = "unknown";
+            auto code = "unknown";
 
-      switch (args.Error()) {
-      case Playback::MediaPlayerError::Unknown:
-        break;
-      case Playback::MediaPlayerError::Aborted:
-        code = "aborted";
-        break;
-      case Playback::MediaPlayerError::NetworkError:
-        code = "networkError";
-        break;
-      case Playback::MediaPlayerError::DecodingError:
-        code = "decodingError";
-        break;
-      case Playback::MediaPlayerError::SourceNotSupported:
-        code = "sourceNotSupported";
-        break;
-      }
+            switch (args.Error()) {
+            case Playback::MediaPlayerError::Unknown:
+                break;
+            case Playback::MediaPlayerError::Aborted:
+                code = "aborted";
+                break;
+            case Playback::MediaPlayerError::NetworkError:
+                code = "networkError";
+                break;
+            case Playback::MediaPlayerError::DecodingError:
+                code = "decodingError";
+                break;
+            case Playback::MediaPlayerError::SourceNotSupported:
+                code = "sourceNotSupported";
+                break;
+            }
 
-      event_sink_->Error(code, errorMessage);
-    });
+            event_sink_->Error(code, errorMessage);
+            });
 
-    mediaPlaybackList.MaxPlayedItemsToKeepOpen(2);
-    mediaPlaybackList.CurrentItemChanged([=](auto, const auto& args) -> void {
-      broadcastState();
-    });
-    mediaPlaybackList.ItemFailed([=](auto, const Playback::MediaPlaybackItemFailedEventArgs& args) -> void {
-      auto error = winrt::hresult_error(args.Error().ExtendedError());
+        mediaPlaybackList.MaxPlayedItemsToKeepOpen(2);
+        mediaPlaybackList.CurrentItemChanged([=](auto, const auto& args) -> void {
+            broadcastState();
+            });
+        mediaPlaybackList.ItemFailed([=](auto, const Playback::MediaPlaybackItemFailedEventArgs& args) -> void {
+            auto error = winrt::hresult_error(args.Error().ExtendedError());
 
-      auto message = winrt::to_string(error.message());
+            auto message = winrt::to_string(error.message());
 
-      std::cerr << "[just_audio_windows] Item error: " << message << std::endl;
+            std::cerr << "[just_audio_windows] Item error: " << message << std::endl;
 
-      auto code = "unknown";
+            auto code = "unknown";
 
-      switch (args.Error().ErrorCode()) {
-      case Playback::MediaPlaybackItemErrorCode::Aborted:
-        code = "aborted";
-        break;
-      case Playback::MediaPlaybackItemErrorCode::NetworkError:
-        code = "networkError";
-        break;
-      case Playback::MediaPlaybackItemErrorCode::DecodeError:
-        code = "decodeError";
-        break;
-      case Playback::MediaPlaybackItemErrorCode::SourceNotSupportedError:
-        code = "sourceNotSupportedError";
-        break;
-      case Playback::MediaPlaybackItemErrorCode::EncryptionError:
-        code = "encryptionError";
-        break;
-      }
+            switch (args.Error().ErrorCode()) {
+            case Playback::MediaPlaybackItemErrorCode::Aborted:
+                code = "aborted";
+                break;
+            case Playback::MediaPlaybackItemErrorCode::NetworkError:
+                code = "networkError";
+                break;
+            case Playback::MediaPlaybackItemErrorCode::DecodeError:
+                code = "decodeError";
+                break;
+            case Playback::MediaPlaybackItemErrorCode::SourceNotSupportedError:
+                code = "sourceNotSupportedError";
+                break;
+            case Playback::MediaPlaybackItemErrorCode::EncryptionError:
+                code = "encryptionError";
+                break;
+            }
 
-      event_sink_->Error(code, message);
-    });
-  }
-  AudioPlayer::~AudioPlayer() {
-    player_channel_->SetMethodCallHandler(nullptr);
-    mediaPlayer.Close();
-  }
+            event_sink_->Error(code, message);
+            });
+    }
+    ~AudioPlayer() {
+        mediaPlayer.Close();
+    }
 
-  bool HasPlayerId(std::string playerId) {
-    return id == playerId;
-  }
+    bool HasPlayerId(std::string playerId) {
+        return id == playerId;
+    }
 
-  void AudioPlayer::HandleMethodCall(
-    const flutter::MethodCall<flutter::EncodableValue>& method_call,
-    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result
-  ) {
-    const auto* args = std::get_if<flutter::EncodableMap>(method_call.arguments());
+    void HandleMethodCall(
+        const flutter::MethodCall<flutter::EncodableValue>& method_call,
+        std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result
+    ) {
+        const auto* args = std::get_if<flutter::EncodableMap>(method_call.arguments());
 
-    std::cerr << "[just_audio_windows] Called " << method_call.method_name() << std::endl;
+        std::cerr << "[just_audio_windows] Called " << method_call.method_name() << std::endl;
 
-    if (method_call.method_name().compare("load") == 0) {
-      const auto* audioSourceData = std::get_if<flutter::EncodableMap>(ValueOrNull(*args, "audioSource"));
-      const auto* initialPosition = std::get_if<int>(ValueOrNull(*args, "initialPosition"));
-      const auto* initialIndex = std::get_if<int>(ValueOrNull(*args, "initialIndex"));
+        if (method_call.method_name().compare("load") == 0) {
+            const auto* audioSourceData = std::get_if<flutter::EncodableMap>(ValueOrNull(*args, "audioSource"));
+            const auto* initialPosition = std::get_if<int>(ValueOrNull(*args, "initialPosition"));
+            const auto* initialIndex = std::get_if<int>(ValueOrNull(*args, "initialIndex"));
 
-      try {
-        loadSource(*audioSourceData);
-      } catch (char* error) {
-        return result->Error("load_error", error);
-      }
+            try {
+                loadSource(*audioSourceData);
+            }
+            catch (char* error) {
+                return result->Error("load_error", error);
+            }
 
-      if (initialIndex != nullptr) {
-        seekToItem((uint32_t)*initialIndex);
-      }
+            if (initialIndex != nullptr) {
+                seekToItem((uint32_t)*initialIndex);
+            }
 
-      if (initialPosition != nullptr) {
-        seekToPosition(*initialPosition);
-      }
+            if (initialPosition != nullptr) {
+                seekToPosition(*initialPosition);
+            }
 
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("play") == 0) {
-      mediaPlayer.Play();
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("pause") == 0) {
-      mediaPlayer.Pause();
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setVolume") == 0) {
-      const auto* volume = std::get_if<double>(ValueOrNull(*args, "volume"));
-      if (!volume) {
-        return result->Error("volume_error", "volume argument missing");
-      }
-      float volumeFloat = (float)*volume;
-      mediaPlayer.Volume(volumeFloat);
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setSpeed") == 0) {
-      const auto* speed = std::get_if<double>(ValueOrNull(*args, "speed"));
-      if (!speed) {
-        return result->Error("speed_error", "speed argument missing");
-      }
-      float speedFloat = (float)*speed;
-      mediaPlayer.PlaybackRate(speedFloat);
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setPitch") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setSkipSilence") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setLoopMode") == 0) {
-      const auto* loopModePtr = std::get_if<int32_t>(ValueOrNull(*args, "loopMode"));
-      if (loopModePtr == nullptr) {
-        return result->Error("loopMode_error", "loopMode argument missing");
-      }
-
-      switch (*loopModePtr) {
-      case 0: // off
-        mediaPlayer.IsLoopingEnabled(false);
-        mediaPlaybackList.AutoRepeatEnabled(false);
-        break;
-      case 1: // one
-        mediaPlayer.IsLoopingEnabled(true);
-        mediaPlaybackList.AutoRepeatEnabled(false);
-        break;
-      case 2: // all
-        mediaPlayer.IsLoopingEnabled(false);
-        mediaPlaybackList.AutoRepeatEnabled(true);
-        break;
-      default:
-        return result->Error("loopMode_error", "loopMode is invalid");
-      }
-
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setShuffleMode") == 0) {
-      const auto* shuffleModePtr = std::get_if<int32_t>(ValueOrNull(*args, "shuffleMode"));
-      if (shuffleModePtr == nullptr) {
-        return result->Error("shuffleMode_error", "shuffleMode argument missing");
-      }
-
-      switch (*shuffleModePtr) {
-      case 0: // none
-        mediaPlaybackList.ShuffleEnabled(false);
-        break;
-      case 1: // all
-        mediaPlaybackList.ShuffleEnabled(true);
-        break;
-      default:
-        return result->Error("shuffleMode_error", "shuffleMode is invalid");
-      }
-
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setShuffleOrder") == 0) {
-      const auto* source = std::get_if<flutter::EncodableMap>(ValueOrNull(*args, "audioSource"));
-
-      setShuffleOrder(*source);
-
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setAutomaticallyWaitsToMinimizeStalling") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setCanUseNetworkResourcesForLiveStreamingWhilePaused") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setPreferredPeakBitRate") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("seek") == 0) {
-      const auto* index = std::get_if<int>(ValueOrNull(*args, "index"));
-      if (index != nullptr) {
-        seekToItem((uint32_t)*index);
-      }
-
-      const auto* position = std::get_if<int>(ValueOrNull(*args, "position"));
-      if (position != nullptr) {
-        seekToPosition(*position);
-      }
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("concatenatingInsertAll") == 0) {
-      const auto* index = std::get_if<int>(ValueOrNull(*args, "index"));
-      const auto* children = std::get_if<flutter::EncodableList>(ValueOrNull(*args, "children"));
-
-      auto items = mediaPlaybackList.Items();
-
-      int currentIndex = *index;
-      for (auto& child : *children) {
-        const auto* childMap = std::get_if<flutter::EncodableMap>(&child);
-        auto mediaSource = createMediaPlaybackItem(*childMap);
-        auto item = Playback::MediaPlaybackItem(mediaSource);
-
-        items.InsertAt(currentIndex, item);
-        currentIndex++;
-      }
-
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("concatenatingRemoveRange") == 0) {
-      const auto* start = std::get_if<int>(ValueOrNull(*args, "startIndex"));
-      const auto* end = std::get_if<int>(ValueOrNull(*args, "endIndex")); // Does not include this item
-
-      int startIndex = *start;
-      int endIndex = *end;
-
-      auto items = mediaPlaybackList.Items();
-      auto size = (int) items.Size();
-
-      if (endIndex > startIndex && startIndex >= 0 && endIndex <= size) {
-        int count = endIndex - startIndex;
-
-        for (int i = 0; i < count; i++) {
-          // The item to remove should always be located at `startIndex`.
-          items.RemoveAt(startIndex);
+            result->Success(flutter::EncodableMap());
         }
-        return result->Success(flutter::EncodableMap());
-      } else {
-        return result->Error("concatenatingRemoveRange_error", "invalid range");
-      }
-    } else if (method_call.method_name().compare("concatenatingMove") == 0) {
-      const auto* from = std::get_if<int>(ValueOrNull(*args, "currentIndex"));
-      const auto* to = std::get_if<int>(ValueOrNull(*args, "newIndex"));
+        else if (method_call.method_name().compare("play") == 0) {
+            mediaPlayer.Play();
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("pause") == 0) {
+            mediaPlayer.Pause();
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setVolume") == 0) {
+            const auto* volume = std::get_if<double>(ValueOrNull(*args, "volume"));
+            if (!volume) {
+                return result->Error("volume_error", "volume argument missing");
+            }
+            float volumeFloat = (float)*volume;
+            mediaPlayer.Volume(volumeFloat);
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setSpeed") == 0) {
+            const auto* speed = std::get_if<double>(ValueOrNull(*args, "speed"));
+            if (!speed) {
+                return result->Error("speed_error", "speed argument missing");
+            }
+            float speedFloat = (float)*speed;
+            mediaPlayer.PlaybackRate(speedFloat);
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setPitch") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setSkipSilence") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setLoopMode") == 0) {
+            const auto* loopModePtr = std::get_if<int32_t>(ValueOrNull(*args, "loopMode"));
+            if (loopModePtr == nullptr) {
+                return result->Error("loopMode_error", "loopMode argument missing");
+            }
 
-      auto items = mediaPlaybackList.Items();
-      auto size = (int) items.Size();
+            switch (*loopModePtr) {
+            case 0: // off
+                mediaPlayer.IsLoopingEnabled(false);
+                mediaPlaybackList.AutoRepeatEnabled(false);
+                break;
+            case 1: // one
+                mediaPlayer.IsLoopingEnabled(true);
+                mediaPlaybackList.AutoRepeatEnabled(false);
+                break;
+            case 2: // all
+                mediaPlayer.IsLoopingEnabled(false);
+                mediaPlaybackList.AutoRepeatEnabled(true);
+                break;
+            default:
+                return result->Error("loopMode_error", "loopMode is invalid");
+            }
 
-      int currentIndex = *from;
-      int newIndex = *to;
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setShuffleMode") == 0) {
+            const auto* shuffleModePtr = std::get_if<int32_t>(ValueOrNull(*args, "shuffleMode"));
+            if (shuffleModePtr == nullptr) {
+                return result->Error("shuffleMode_error", "shuffleMode argument missing");
+            }
 
-      auto item = items.GetAt(currentIndex);
+            switch (*shuffleModePtr) {
+            case 0: // none
+                mediaPlaybackList.ShuffleEnabled(false);
+                break;
+            case 1: // all
+                mediaPlaybackList.ShuffleEnabled(true);
+                break;
+            default:
+                return result->Error("shuffleMode_error", "shuffleMode is invalid");
+            }
 
-      if (currentIndex >= size || newIndex > size) {
-        return result->Error("concatenatingMove_error", "index out of bounds");
-      }
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setShuffleOrder") == 0) {
+            const auto* source = std::get_if<flutter::EncodableMap>(ValueOrNull(*args, "audioSource"));
 
-      items.RemoveAt(currentIndex);
-      items.InsertAt(newIndex, item);
-      // Do nothing if the two equals
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("setAndroidAudioAttributes") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("audioEffectSetEnabled") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("androidLoudnessEnhancerSetTargetGain") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("androidEqualizerGetParameters") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("androidEqualizerBandSetGain") == 0) {
-      result->Success(flutter::EncodableMap());
-    } else if (method_call.method_name().compare("dispose") == 0) {
-      mediaPlayer.Close();
-      result->Success(flutter::EncodableMap());
-    } else {
+            setShuffleOrder(*source);
+
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setAutomaticallyWaitsToMinimizeStalling") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setCanUseNetworkResourcesForLiveStreamingWhilePaused") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setPreferredPeakBitRate") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("seek") == 0) {
+            const auto* index = std::get_if<int>(ValueOrNull(*args, "index"));
+            if (index != nullptr) {
+                seekToItem((uint32_t)*index);
+            }
+
+            const auto* position = std::get_if<int>(ValueOrNull(*args, "position"));
+            if (position != nullptr) {
+                seekToPosition(*position);
+            }
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("concatenatingInsertAll") == 0) {
+            const auto* index = std::get_if<int>(ValueOrNull(*args, "index"));
+            const auto* children = std::get_if<flutter::EncodableList>(ValueOrNull(*args, "children"));
+
+            auto items = mediaPlaybackList.Items();
+
+            int currentIndex = *index;
+            for (auto& child : *children) {
+                const auto* childMap = std::get_if<flutter::EncodableMap>(&child);
+                auto mediaSource = createMediaPlaybackItem(*childMap);
+                auto item = Playback::MediaPlaybackItem(mediaSource);
+
+                items.InsertAt(currentIndex, item);
+                currentIndex++;
+            }
+
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("concatenatingRemoveRange") == 0) {
+            const auto* start = std::get_if<int>(ValueOrNull(*args, "startIndex"));
+            const auto* end = std::get_if<int>(ValueOrNull(*args, "endIndex")); // Does not include this item
+
+            int startIndex = *start;
+            int endIndex = *end;
+
+            auto items = mediaPlaybackList.Items();
+            auto size = (int)items.Size();
+
+            if (endIndex > startIndex && startIndex >= 0 && endIndex <= size) {
+                int count = endIndex - startIndex;
+
+                for (int i = 0; i < count; i++) {
+                    // The item to remove should always be located at `startIndex`.
+                    items.RemoveAt(startIndex);
+                }
+                return result->Success(flutter::EncodableMap());
+            }
+            else {
+                return result->Error("concatenatingRemoveRange_error", "invalid range");
+            }
+        }
+        else if (method_call.method_name().compare("concatenatingMove") == 0) {
+            const auto* from = std::get_if<int>(ValueOrNull(*args, "currentIndex"));
+            const auto* to = std::get_if<int>(ValueOrNull(*args, "newIndex"));
+
+            auto items = mediaPlaybackList.Items();
+            auto size = (int)items.Size();
+
+            int currentIndex = *from;
+            int newIndex = *to;
+
+            auto item = items.GetAt(currentIndex);
+
+            if (currentIndex >= size || newIndex > size) {
+                return result->Error("concatenatingMove_error", "index out of bounds");
+            }
+
+            items.RemoveAt(currentIndex);
+            items.InsertAt(newIndex, item);
+            // Do nothing if the two equals
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setAndroidAudioAttributes") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("audioEffectSetEnabled") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("androidLoudnessEnhancerSetTargetGain") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("androidEqualizerGetParameters") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("androidEqualizerBandSetGain") == 0) {
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("dispose") == 0) {
+            mediaPlayer.Close();
+            result->Success(flutter::EncodableMap());
+        }
+        else if (method_call.method_name().compare("setOutputDevice") == 0) {
+            const std::string* deviceID = std::get_if<std::string>(ValueOrNull(*args, "deviceID"));
+            std::cout << "DEVICE ID FETCHED: " << *deviceID << std::endl;
+
+            if (deviceID) {
+
+                std::cout << "fetching devices: " << std::endl;
+                // Retrieve all audio output devices
+                auto devices = DeviceInformation::FindAllAsync().get();
+                std::cout << "device fetched: " <<  std::endl;
+
+                // Find the device with the specified ID
+                winrt::hstring hDeviceID = winrt::to_hstring(*deviceID);
+                std::cout << "device fetched: " << std::endl;
+                winrt::Windows::Devices::Enumeration::DeviceInformation selectedDevice = nullptr;
+                std::cout << "devices fetched: " << &devices << std::endl;
+                for (auto device : devices) {
+                    std::string deviceIdStr = winrt::to_string(device.Id());  
+
+                    if (deviceIdStr.find(*deviceID) != std::wstring::npos) {
+                        std::cout << "setting selected device " << std::endl;
+                        selectedDevice = device;
+                        break;
+                    }
+                }
+
+                // Check if the device with the specified ID was found
+                if (!selectedDevice) {
+                    result->Error("device_not_found", "Audio device with the provided ID not found");
+                    return;
+                }
+
+                std::cout << "setting  mediaPlayer.AudioDevice() " << std::endl;
+                // Set the selected device as the audio output device
+                mediaPlayer.AudioDevice(selectedDevice);
+                result->Success();
+            }
+            else {
+                std::cerr << "Device ID not found in method arguments" << std::endl;
+                result->Error("device_id_not_found", "Device ID not found in method arguments");
+            }
+        }
+    else {
       result->NotImplemented();
     }
   }
 
-  void AudioPlayer::loadSource(const flutter::EncodableMap& source) const& {
+
+  void loadSource(const flutter::EncodableMap& source) const& {
     auto items = mediaPlaybackList.Items();
     items.Clear(); // Always clear the list since we are resetting
 
@@ -441,7 +517,7 @@ public:
   /**
   * Creates a single MediaPlaybackItem, which can be used directly or inside a list.
   */
-  Playback::MediaPlaybackItem AudioPlayer::createMediaPlaybackItem(const flutter::EncodableMap& source) const& {
+  Playback::MediaPlaybackItem createMediaPlaybackItem(const flutter::EncodableMap& source) const& {
     const std::string* type = std::get_if<std::string>(ValueOrNull(source, "type"));
 
     if (type->compare("clipping") == 0) {
@@ -479,7 +555,7 @@ public:
   /**
   * Creates a single MediaSource.
   */
-  MediaSource AudioPlayer::createMediaSource(const flutter::EncodableMap& source) const& {
+  MediaSource createMediaSource(const flutter::EncodableMap& source) const& {
     const std::string* type = std::get_if<std::string>(ValueOrNull(source, "type"));
     if (type->compare("progressive") == 0 || type->compare("dash") == 0 || type->compare("hls") == 0) {
       const auto* uri = std::get_if<std::string>(ValueOrNull(source, "uri"));
@@ -491,7 +567,7 @@ public:
     }
   }
 
-  void AudioPlayer::broadcastState() {
+  void broadcastState() {
     try {
       broadcastPlaybackEvent();
     } catch (winrt::hresult_error const& ex) {
@@ -505,7 +581,7 @@ public:
     }
   }
 
-  void AudioPlayer::broadcastPlaybackEvent() {
+  void broadcastPlaybackEvent() {
     auto session = mediaPlayer.PlaybackSession();
 
     auto eventData = flutter::EncodableMap();
@@ -514,38 +590,21 @@ public:
 
     auto now = std::chrono::system_clock::now();
 
-    // Try to get the buffering progress or use 1 if an error occurs
-    double bufferingProgress;
-    try
-    {
-      bufferingProgress = session.BufferingProgress();
-    }
-    catch (...)
-    {
-      // If an error occurs, log it and use 1 as the buffering progress
-      std::cerr << "[just_audio_windows]: Broadcast playback evcent error: Error accessing BufferingProgress. Using default value of 1." << std::endl;
-      bufferingProgress = 1;
-    }
-
     eventData[flutter::EncodableValue("processingState")] = flutter::EncodableValue(processingState(session.PlaybackState()));
     eventData[flutter::EncodableValue("updatePosition")] = flutter::EncodableValue(TO_MICROSECONDS(session.Position())); //int
     eventData[flutter::EncodableValue("updateTime")] = flutter::EncodableValue(TO_MILLISECONDS(now.time_since_epoch())); //int
-    eventData[flutter::EncodableValue("bufferedPosition")] = flutter::EncodableValue((int64_t)(duration * bufferingProgress)); //int
+    eventData[flutter::EncodableValue("bufferedPosition")] = flutter::EncodableValue((int64_t)(duration * session.BufferingProgress())); //int
     eventData[flutter::EncodableValue("duration")] = flutter::EncodableValue(duration); //int
 
-    if (mediaPlaybackList.Items().Size() > 0) {
-      int64_t currentIndex = mediaPlaybackList.CurrentItemIndex();
-      if (currentIndex != 4294967295) { // UINT32_MAX - 1
-        eventData[flutter::EncodableValue("currentIndex")] = flutter::EncodableValue(currentIndex); //int
-      }
-    } else {
-      eventData[flutter::EncodableValue("currentIndex")] = flutter::EncodableValue(0); //int
+    int64_t currentIndex = mediaPlaybackList.CurrentItemIndex();
+    if (currentIndex != 4294967295) { // UINT32_MAX - 1
+      eventData[flutter::EncodableValue("currentIndex")] = flutter::EncodableValue(currentIndex); //int
     }
 
     event_sink_->Success(eventData);
   }
 
-  int AudioPlayer::processingState(Playback::MediaPlaybackState state) {
+  int processingState(Playback::MediaPlaybackState state) {
     auto session = mediaPlayer.PlaybackSession();
 
     if (state == Playback::MediaPlaybackState::None) {
@@ -560,7 +619,7 @@ public:
     return 3; //ready
   }
 
-  void AudioPlayer::broadcastDataEvent() {
+  void broadcastDataEvent() {
     auto session = mediaPlayer.PlaybackSession();
     auto eventData = flutter::EncodableMap();
 
@@ -575,7 +634,7 @@ public:
     data_sink_->Success(eventData);
   }
 
-  int AudioPlayer::getLoopMode() {
+  int getLoopMode() {
     if (mediaPlayer.IsLoopingEnabled()) {
       // one
       return 1;
@@ -588,12 +647,12 @@ public:
     }
   }
 
-  int AudioPlayer::getShuffleMode() {
+  int getShuffleMode() {
     // TODO(bdlukaa): playlists
     return 0;
   }
 
-  flutter::EncodableMap AudioPlayer::collectIcyMetadata() {
+  flutter::EncodableMap collectIcyMetadata() {
     auto icyData = flutter::EncodableMap();
 
     // TODO: Icy Metadata
@@ -608,7 +667,7 @@ public:
     return num;
   }
 
-  void AudioPlayer::seekToItem(uint32_t index) {
+  void seekToItem(uint32_t index) {
     if (index >= mediaPlaybackList.Items().Size()) {
       return;
     }
@@ -622,13 +681,13 @@ public:
     broadcastState();
   }
 
-  void AudioPlayer::seekToPosition(int microseconds) {
+  void seekToPosition(int microseconds) {
     mediaPlayer.Position(TimeSpan(std::chrono::microseconds(microseconds)));
 
     broadcastState();
   }
 
-  void AudioPlayer::setShuffleOrder(const flutter::EncodableMap& source) {
+  void setShuffleOrder(const flutter::EncodableMap& source) {
     const std::string* type = std::get_if<std::string>(ValueOrNull(source, "type"));
     // const std::string* id = std::get_if<std::string>(ValueOrNull(source, "id"));
 
