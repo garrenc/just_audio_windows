@@ -476,10 +476,17 @@ public:
                     result->Error("device_not_found", "Audio device with the provided ID not found");
                     return;
                 }
-
+                try {
                 std::cout << "setting  mediaPlayer.AudioDevice() " << std::endl;
                 // Set the selected device as the audio output device
                 mediaPlayer.AudioDevice(selectedDevice);
+                }catch(...){
+                  
+                std::cout << "Something went wrong when setting AudioDevice() " << std::endl;
+                result ->Error("device_set_error", "Something went wrong when setting AudioDevice()")
+                return;
+                }
+                
                 result->Success();
             }
             else {
