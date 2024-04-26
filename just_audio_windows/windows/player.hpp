@@ -483,7 +483,7 @@ public:
                 }catch(...){
                   
                 std::cout << "Something went wrong when setting AudioDevice() " << std::endl;
-                result ->Error("device_set_error", "Something went wrong when setting AudioDevice()")
+                result ->Error("device_set_error", "Something went wrong when setting AudioDevice()");
                 return;
                 }
                 
