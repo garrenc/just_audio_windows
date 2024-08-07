@@ -154,6 +154,8 @@ public:
         event_sink_ = std::make_unique<AudioEventSink>(messenger, "com.ryanheise.just_audio.events." + idx);
         data_sink_ = std::make_unique<AudioEventSink>(messenger, "com.ryanheise.just_audio.data." + idx);
 
+        mediaPlayer.CommandManager().IsEnabled(false);
+
         /// Set up event callbacks
         // Playback event
         mediaPlayer.PlaybackSession().PlaybackStateChanged([=](auto, const auto& args) -> void {
