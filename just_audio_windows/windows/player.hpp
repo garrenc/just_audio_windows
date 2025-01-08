@@ -449,45 +449,48 @@ public:
         }
         else if (method_call.method_name().compare("setOutputDevice") == 0) {
             const std::string* deviceID = std::get_if<std::string>(ValueOrNull(*args, "deviceID"));
-            std::cout << "DEVICE ID FETCHED: " << *deviceID << std::endl;
 
             if (deviceID) {
 
-                std::cout << "fetching devices: " << std::endl;
-                // Retrieve all audio output devices
-                auto devices = DeviceInformation::FindAllAsync().get();
-                std::cout << "device fetched: " <<  std::endl;
+                std::cout << "DEVICE ID FETCHED: " << *deviceID << std::endl;
+                std::string deviceIdValue = *deviceID; // Copy the value
+             
 
-                // Find the device with the specified ID
-                winrt::hstring hDeviceID = winrt::to_hstring(*deviceID);
-                std::cout << "device fetched: " << std::endl;
-                winrt::Windows::Devices::Enumeration::DeviceInformation selectedDevice = nullptr;
-                std::cout << "devices fetched: " << &devices << std::endl;
-                for (auto device : devices) {
-                    std::string deviceIdStr = winrt::to_string(device.Id());  
-
-                    if (deviceIdStr.find(*deviceID) != std::wstring::npos) {
-                        std::cout << "setting selected device " << std::endl;
-                        selectedDevice = device;
-                        break;
+                std::thread([this, deviceIdValue]() {
+                    std::cout << "fetching devices: " << std::endl;
+                    // Retrieve all audio output devices
+                    auto devices = DeviceInformation::FindAllAsync().get();
+                    std::cout << "devices fetched" << std::endl;
+                    // Find the device with the specified ID
+                    winrt::Windows::Devices::Enumeration::DeviceInformation selectedDevice = nullptr;
+                    for (auto device : devices) {
+                        std::string deviceIdStr = winrt::to_string(device.Id());
+                      
+                        if (deviceIdStr.find(deviceIdValue) != std::wstring::npos) {
+                            std::cout << "setting selected device " << std::endl;
+                            selectedDevice = device;
+                            break;
+                        }
                     }
-                }
 
-                // Check if the device with the specified ID was found
-                if (!selectedDevice) {
-                    result->Error("device_not_found", "Audio device with the provided ID not found");
-                    return;
-                }
-                try {
-                std::cout << "setting  mediaPlayer.AudioDevice() " << std::endl;
-                // Set the selected device as the audio output device
-                mediaPlayer.AudioDevice(selectedDevice);
-                }catch(...){
-                  
-                std::cout << "Something went wrong when setting AudioDevice() " << std::endl;
-                result ->Error("device_set_error", "Something went wrong when setting AudioDevice()");
-                return;
-                }
+                    // Check if the device with the specified ID was found
+                    if (!selectedDevice) {
+                        std::cout << "no selected device found, ending thread.... " << std::endl;
+                        return;
+                    }
+                    try {
+                        std::cout << "setting  mediaPlayer.AudioDevice() " << winrt::to_string(selectedDevice.Id()) << std::endl;
+                        // Set the selected device as the audio output device
+                        mediaPlayer.AudioDevice(selectedDevice);
+                    }
+                    catch (...) {
+
+                        std::cout << "Something went wrong when setting AudioDevice() " << std::endl;
+                        return;
+                    }
+                    }).detach();
+
+              
                 
                 result->Success();
             }
