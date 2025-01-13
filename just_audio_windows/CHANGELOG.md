@@ -1,3 +1,7 @@
+## [0.2.6]
+
+- [fix]: optimized setOutputDevice calls and abort the call if player is already disposed
+
 ## [0.2.5]
 
 - [fix]: resolved issue that caused app to freeze during setOutputDevice function (now it runs in thread)
