@@ -1,3 +1,7 @@
+## [0.2.7]
+
+- [fix]: app crash on setVolume when there is no device
+
 ## [0.2.6]
 
 - [fix]: optimized setOutputDevice calls and abort the call if player is already disposed

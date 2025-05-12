@@ -301,8 +301,29 @@ public:
 			{
 				return result->Error("volume_error", "volume argument missing");
 			}
+			if (closed) {
+				std::cout << "Player is closed, aborting volume set" << std::endl;
+				return result->Success(flutter::EncodableMap{{"error", "volume - player is closed"}});
+			}
 			float volumeFloat = (float)*volume;
-			mediaPlayer.Volume(volumeFloat);
+			try {
+				// Extra safeguard: if AudioDevice is nullptr, don't set volume
+				auto device = mediaPlayer.AudioDevice();
+				
+				std::cout<< "device get" << std::endl;
+				if (!device) {
+					std::cerr << "[just_audio_windows] setVolume error: no device" << std::endl;
+					return result->Success(flutter::EncodableMap{{"error", "volume - no device"}});
+				}
+				std::cout << "Setting volume to " << volumeFloat << std::endl;
+				mediaPlayer.Volume(volumeFloat);
+				std::cout << "Volume set successfully" << std::endl;
+				result->Success(flutter::EncodableMap());
+			}
+			catch (...) {
+				std::cerr << "[just_audio_windows] setVolume error" << std::endl;
+				return result->Success(flutter::EncodableMap{{"error", "volume - something went wrong"}});
+			}
 			result->Success(flutter::EncodableMap());
 		}
 		else if (method_call.method_name().compare("setSpeed") == 0)
