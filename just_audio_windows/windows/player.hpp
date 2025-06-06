@@ -147,6 +147,7 @@ public:
 	Playback::MediaPlayer mediaPlayer{};
 	Playback::MediaPlaybackList mediaPlaybackList{};
 	bool closed = false;
+	winrt::Windows::Devices::Enumeration::DeviceInformation currentDevice = nullptr;
 	std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> player_channel_;
 	std::unique_ptr<AudioEventSink> event_sink_ = nullptr;
 	std::unique_ptr<AudioEventSink> data_sink_ = nullptr;
@@ -313,16 +314,15 @@ public:
 				std::cout<< "device get" << std::endl;
 				if (!device) {
 					std::cerr << "[just_audio_windows] setVolume error: no device" << std::endl;
-					return result->Success(flutter::EncodableMap{{"error", "volume - no device"}});
+					result->Success(flutter::EncodableMap{{"error", "volume - no device"}});
+					return;
 				}
 				std::cout << "Setting volume to " << volumeFloat << std::endl;
 				mediaPlayer.Volume(volumeFloat);
-				std::cout << "Volume set successfully" << std::endl;
-				result->Success(flutter::EncodableMap());
 			}
 			catch (...) {
 				std::cerr << "[just_audio_windows] setVolume error" << std::endl;
-				return result->Success(flutter::EncodableMap{{"error", "volume - something went wrong"}});
+				result->Success(flutter::EncodableMap{{"error", "volume - something went wrong"}});
 			}
 			result->Success(flutter::EncodableMap());
 		}
@@ -580,15 +580,18 @@ public:
 							dispatcher.TryEnqueue([this, selectedDevice]() {
 								try {
 									// Check if the device is already set
-									auto currentDevice = mediaPlayer.AudioDevice();
+							
 									if (currentDevice && currentDevice.Id() == selectedDevice.Id()) {
 										std::cout << "Audio device is already set to the selected device." << std::endl;
 										return;
 									}
 
+
+
 									// Set the selected device as the audio output device
 									std::cout << "Setting mediaPlayer.AudioDevice() to " << winrt::to_string(selectedDevice.Id()) << std::endl;
 									mediaPlayer.AudioDevice(selectedDevice);
+									currentDevice = selectedDevice;
 								}
 								catch (const winrt::hresult_error& ex) {
 									std::cerr << "Error setting AudioDevice: " << winrt::to_string(ex.message()) << std::endl;
